@@ -1,7 +1,7 @@
 # 004 · 路线C第①步：规则老师与人造标签数据集（2026-09-27）
 
 > 产物：`scripts/rule_teacher.py`（入门级规则老师）· `scripts/record_data.py`（录制器）· `data/dataset-v1.npz`（gitignored）
-> 决策：用户拍板路线 C（SL 热身 → RL 突破），老师定入门级。
+> 决策：拍板路线 C（SL 热身 → RL 突破），老师定入门级。
 
 ## 标签是什么（认知定稿）
 

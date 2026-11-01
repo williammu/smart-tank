@@ -92,7 +92,7 @@ python scripts/train_parallel.py --workers 28 --games 252 --iters 2000 \
 | `analyze_circling.py` | 行为量化：贴墙率、绕柱净跨度、开火时机、特征使用率 |
 | `record_demo_gif.py` | 录单局 GIF |
 
-`notes/` 下是 20 篇设计笔记，按时间顺序记录了每个决定的原因和踩过的坑，包括失败的实验。
+`notes/` 下是 19 篇设计笔记，按时间顺序记录了每个决定的原因和踩过的坑，包括失败的实验。
 
 ---
 
