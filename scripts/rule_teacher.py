@@ -44,7 +44,7 @@ class RuleTeacher:
         cur = math.atan2(obs[FY], obs[FX])
         # 期望朝向：敌人在哪个方向（dx/dy 分别按 W/H 归一化过，还原纵横比再算角度）
         want = math.atan2(obs[DY] * ARENA_H, obs[DX] * ARENA_W)
-        # 最短角差，折回 [-π, π]——正是 cos/sin 编码讨论里的"圆周接缝"，规则代码也要处理
+        # 最短角差，折回 [-π, π]——正是用 cos/sin 表示朝向时的「圆周接缝」，规则代码也要处理
         diff = (want - cur + math.pi) % (2 * math.pi) - math.pi
 
         # 容差随距离缩放：子弹命中要求 垂直偏移 < 坦克半径+弹半径≈15px，

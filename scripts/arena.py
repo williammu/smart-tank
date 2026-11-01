@@ -47,7 +47,7 @@ TURN_RATE = 0.06            # 每步转向弧度（≈3.4°）
 BACK_SPEED = 1.4            # 后退比前进慢
 
 
-# ---------------- 神经网络（numpy 手写，对应讨论过的结构） ----------------
+# ---------------- 神经网络（numpy 手写，从零实现） ----------------
 class MLP:
     """20 → 128 → 128 → 9，每层 h = ReLU(W·x + b)，输出层接 softmax。"""
 
@@ -61,7 +61,7 @@ class MLP:
         self.n_params = sum(w.size + b.size for w, b in zip(self.weights, self.biases))
 
     def forward(self, x):
-        """前向传播：就是讨论里的那句话，重复三遍。"""
+        """前向传播：就是 y = ReLU(Wx + b)，逐层重复。"""
         h = np.asarray(x, dtype=np.float32)
         for i, (w, b) in enumerate(zip(self.weights, self.biases)):
             z = w @ h + b

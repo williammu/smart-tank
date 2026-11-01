@@ -1,6 +1,6 @@
 # 001 · MLP 与前向传播（2026-09-27）
 
-> 来源：智能坦克项目第一次认知讨论。配套可视化：`viz/`（index / forward-pass / output-layer）。
+> 来源：智能坦克项目启动时的第一次设计讨论。配套可视化：`viz/`（index / forward-pass / output-layer）。
 
 ## 网络结构（坦克项目设定）
 

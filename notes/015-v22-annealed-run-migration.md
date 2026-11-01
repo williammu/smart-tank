@@ -32,7 +32,7 @@
 
 ## 迁移要点（可复现）
 
-- 数据（`data/` 为 gitignored，经 中继 rsync，**字节级全等**）：`rl-v22-resume.npz` 538,194 B / `bc-v21-nocover.npz` 11,782,546 B / `rl-v21.npz` 179,110 B
+- 数据（`data/` 为 gitignored，跨机 rsync 同步，**字节级全等**）：`rl-v22-resume.npz` 538,194 B / `bc-v21-nocover.npz` 11,782,546 B / `rl-v21.npz` 179,110 B
 - 环境：`.venv`（py3.14）+ numpy 2.5.3；语法冒烟 `py_compile` 通过
 - 关键机制：`--resume` 读的是 **`--out` 推导出的 `<out>-resume.npz`**（不是 `--init`），文件名对上即可接力；首行打印 `=== 断点续训 @433（best -4）===`
 - 速率画像：M3 Pro / 10 工人 **平均 6.7 s/轮**（波动 5–21 s/轮，受本机负载与热降频影响），全程 12.0 h；对照 本机 4090 侧约 1.4 s/轮
