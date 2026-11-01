@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>全连接层可视化：输入层(4) → 隐藏层(5)</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --dim: #8b949e;
+    --pos: #3fb950;   /* 正权重 绿 */
+    --neg: #f85149;   /* 负权重 红 */
+    --accent: #58a6ff;
+    --node-in: #58a6ff;
+    --node-hid: #d2a8ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+    padding: 24px 16px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 16px; }
+
+  .stage {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 8px;
+  }
+  svg { display: block; width: 100%; height: auto; }
+
+  /* 连线 */
+  .edge {
+    fill: none;
+    opacity: .28;
+    transition: opacity .15s ease;
+  }
+  .edge.flow {
+    stroke-dasharray: 6 10;
+    animation: dashflow 1.2s linear infinite;
+  }
+  @keyframes dashflow {
+    to { stroke-dashoffset: -16; }
+  }
+  .stage.highlight .edge { opacity: .07; animation: none; }
+  .stage.highlight .edge.active { opacity: 1; }
+
+  /* 节点 */
+  .node { cursor: pointer; }
+  .node circle {
+    fill: var(--panel);
+    stroke-width: 2;
+    transition: filter .15s ease;
+  }
+  .node.in  circle { stroke: var(--node-in); }
+  .node.hid circle { stroke: var(--node-hid); }
+  .node:hover circle, .node.selected circle {
+    filter: drop-shadow(0 0 6px currentColor);
+  }
+  .node text {
+    fill: var(--text);
+    font-size: 13px;
+    text-anchor: middle;
+    dominant-baseline: central;
+    pointer-events: none;
+  }
+  .layer-label {
+    fill: var(--dim);
+    font-size: 13px;
+    text-anchor: middle;
+  }
+  .lb-end { text-anchor: end; }
+
+  /* 下方信息区 */
+  .info {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  @media (min-width: 860px) {
+    .info { grid-template-columns: 1.2fr 1fr; }
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+  .card h2 { font-size: 14px; color: var(--accent); margin-bottom: 8px; }
+  .formula {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .formula .w-pos { color: var(--pos); }
+  .formula .w-neg { color: var(--neg); }
+  .formula .res   { color: var(--node-hid); font-weight: 600; }
+  .legend { color: var(--dim); font-size: 13px; }
+  .legend b { font-weight: 600; }
+  .swatch {
+    display: inline-block; width: 18px; height: 0;
+    border-top: 3px solid; vertical-align: middle; margin: 0 4px 0 12px;
+    border-radius: 2px;
+  }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  button {
+    background: #21262d; color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 14px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.on { background: #1f6feb33; border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>全连接（Dense / Fully Connected）：输入层 × 隐藏层</h1>
+  <div class="sub">4 个输入 × 5 个神经元 = 20 条连接 = 20 个权重。每个输入连到每一个神经元，一条不多一条不少。悬停节点看它发出的连接；点击隐藏神经元看它的加权求和公式。</div>
+
+  <div class="toolbar">
+    <button id="btnFlow" class="on">⏸ 信号流动</button>
+    <button id="btnRand">🎲 换一组随机权重</button>
+  </div>
+
+  <div class="stage" id="stage">
+    <svg id="svg" viewBox="0 0 900 560" role="img" aria-label="全连接神经网络图示"></svg>
+  </div>
+
+  <div class="info">
+    <div class="card">
+      <h2>神经元内部在干什么</h2>
+      <div class="formula" id="formula">点击右侧任意一个隐藏神经元 h₁…h₅，看它的 5 项加权求和 →</div>
+    </div>
+    <div class="card legend">
+      <h2>图例</h2>
+      <span class="swatch" style="color:var(--pos)"></span><b style="color:var(--pos)">正权重</b>（强化该输入）
+      <span class="swatch" style="color:var(--neg)"></span><b style="color:var(--neg)">负权重</b>（抑制该输入）
+      <br>线越粗 = 权重绝对值越大。训练调的就是这 20 个 w（外加 5 个偏置 b）。
+      <br><br>缩小版对应坦克项目的 20 → 128 那层（2560 条连接），结构完全一样，只是更密。
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('svg');
+  const stage = document.getElementById('stage');
+  const formulaEl = document.getElementById('formula');
+
+  // ---- 布局参数（viewBox 坐标，随宽度等比缩放） ----
+  const X_IN = 160, X_HID = 640;
+  const N_IN = 4, N_HID = 5;
+  const TOP_IN = 120, GAP_IN = 110;   // 输入列：120,230,340,450
+  const TOP_HID = 90, GAP_HID = 100;  // 隐藏列：90,190,290,390,490
+  const R = 26;
+
+  const inY  = i => TOP_IN  + i * GAP_IN;
+  const hidY = j => TOP_HID + j * GAP_HID;
+
+  // 输入示例（坦克场景里的特征值，仅示意）
+  const inputs = [
+    { name: 'x₁', desc: '自己x坐标', val: 0.62 },
+    { name: 'x₂', desc: '敌人x坐标', val: -0.31 },
+    { name: 'x₃', desc: '自己血量',   val: 0.85 },
+    { name: 'x₄', desc: '最近子弹距离', val: -0.47 },
+  ];
+
+  // ---- 伪随机权重（可重掷） ----
+  let W = [], B = [];
+  function randWeights() {
+    W = []; B = [];
+    for (let i = 0; i < N_IN; i++) {
+      W.push([]);
+      for (let j = 0; j < N_HID; j++) {
+        W[i].push(+(Math.random() * 2 - 1).toFixed(2)); // [-1, 1]
+      }
+    }
+    for (let j = 0; j < N_HID; j++) B.push(+(Math.random() * 0.6 - 0.3).toFixed(2));
+  }
+
+  function edgeColor(w) { return w >= 0 ? 'var(--pos)' : 'var(--neg)'; }
+  function edgeWidth(w) { return 1 + Math.abs(w) * 3.2; }
+
+  let flowOn = true;
+  let selected = -1;
+
+  function el(tag, attrs) {
+    const e = document.createElementNS(SVG_NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  function render() {
+    svg.innerHTML = '';
+
+    // 层标题
+    const t1 = el('text', { x: X_IN, y: 55, class: 'layer-label' });
+    t1.textContent = '输入层 (4)';
+    const t2 = el('text', { x: X_HID, y: 40, class: 'layer-label' });
+    t2.textContent = '隐藏层 (5 个神经元)';
+    svg.appendChild(t1); svg.appendChild(t2);
+
+    // 20 条边（先画线，节点压在上层）
+    for (let i = 0; i < N_IN; i++) {
+      for (let j = 0; j < N_HID; j++) {
+        const w = W[i][j];
+        const path = el('path', {
+          d: `M ${X_IN + R} ${inY(i)} C ${X_IN + 150} ${inY(i)}, ${X_HID - 150} ${hidY(j)}, ${X_HID - R} ${hidY(j)}`,
+          class: 'edge' + (flowOn ? ' flow' : ''),
+          stroke: edgeColor(w),
+          'stroke-width': edgeWidth(w).toFixed(2),
+          'data-i': i, 'data-j': j,
+        });
+        svg.appendChild(path);
+      }
+    }
+
+    // 输入节点
+    for (let i = 0; i < N_IN; i++) {
+      const g = el('g', { class: 'node in', 'data-i': i });
+      g.appendChild(el('circle', { cx: X_IN, cy: inY(i), r: R }));
+      const tx = el('text', { x: X_IN, y: inY(i) });
+      tx.textContent = inputs[i].name;
+      g.appendChild(tx);
+      const lb = el('text', { x: X_IN, y: inY(i) + R + 18, class: 'layer-label' });
+      lb.textContent = `${inputs[i].desc} = ${inputs[i].val}`;
+      g.appendChild(lb);
+      g.addEventListener('mouseenter', () => highlight(i, -1));
+      g.addEventListener('mouseleave', clearHighlight);
+      svg.appendChild(g);
+    }
+
+    // 隐藏神经元节点
+    for (let j = 0; j < N_HID; j++) {
+      const g = el('g', { class: 'node hid' + (j === selected ? ' selected' : ''), 'data-j': j });
+      g.appendChild(el('circle', { cx: X_HID, cy: hidY(j), r: R }));
+      const tx = el('text', { x: X_HID, y: hidY(j) });
+      tx.textContent = 'h' + '₁₂₃₄₅'[j];
+      g.appendChild(tx);
+      g.addEventListener('mouseenter', () => highlight(-1, j));
+      g.addEventListener('mouseleave', clearHighlight);
+      g.addEventListener('click', () => selectNeuron(j));
+      svg.appendChild(g);
+    }
+
+    if (selected >= 0) showFormula(selected);
+  }
+
+  function highlight(i, j) {
+    stage.classList.add('highlight');
+    svg.querySelectorAll('.edge').forEach(e => {
+      const ei = +e.getAttribute('data-i'), ej = +e.getAttribute('data-j');
+      if ((i >= 0 && ei === i) || (j >= 0 && ej === j)) e.classList.add('active');
+    });
+  }
+  function clearHighlight() {
+    stage.classList.remove('highlight');
+    svg.querySelectorAll('.edge.active').forEach(e => e.classList.remove('active'));
+  }
+
+  function selectNeuron(j) {
+    selected = (selected === j) ? -1 : j;
+    render();
+  }
+
+  function fmtW(w) {
+    const cls = w >= 0 ? 'w-pos' : 'w-neg';
+    const sign = w >= 0 ? '+' : '−';
+    return `${sign}<span class="${cls}">${Math.abs(w).toFixed(2)}</span>`;
+  }
+
+  function showFormula(j) {
+    const terms = [];
+    let z = B[j];
+    for (let i = 0; i < N_IN; i++) {
+      const w = W[i][j];
+      terms.push(`${fmtW(w)}×${inputs[i].name}`);
+      z += w * inputs[i].val;
+    }
+    const zStr = z.toFixed(3);
+    const out = Math.max(0, z).toFixed(3);
+    formulaEl.innerHTML =
+      `h${'₁₂₃₄₅'[j]} = ReLU( ${terms.join(' ')} ${fmtW(B[j])}<sub>b</sub> )<br>` +
+      `&nbsp;&nbsp;&nbsp;= ReLU( ${zStr} ) = <span class="res">${out}</span>` +
+      (z < 0 ? ' <span style="color:var(--dim)">← z&lt;0 被 ReLU 截断，神经元不激活</span>' : '');
+  }
+
+  // ---- 工具栏 ----
+  document.getElementById('btnFlow').addEventListener('click', function () {
+    flowOn = !flowOn;
+    this.textContent = flowOn ? '⏸ 信号流动' : '▶ 信号流动';
+    this.classList.toggle('on', flowOn);
+    render();
+  });
+  document.getElementById('btnRand').addEventListener('click', () => {
+    randWeights();
+    render();
+  });
+
+  randWeights();
+  render();
+})();
+</script>
+</body>
+</html>

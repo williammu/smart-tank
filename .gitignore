@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+data/*-resume.npz
+data/dataset-*.npz
+data/bc-v15-cover.npz
+data/bc-v23-cover.npz
+data/bc-nocover.npz
+data/bc-v21-nocover.npz
+out/
+*.gif
+!media/*.gif

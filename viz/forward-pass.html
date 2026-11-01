@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>前向传播动画：输入 → 权重 → 神经元 → 输出</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#e6edf3; --dim:#8b949e;
+    --pos:#3fb950; --neg:#f85149; --accent:#58a6ff; --node-in:#58a6ff; --node-hid:#d2a8ff;
+    --dead:#6e7681; --gold:#e3b341;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    min-height:100vh; padding:24px 16px; }
+  .wrap { max-width:1180px; margin:0 auto; }
+  h1 { font-size:20px; font-weight:600; margin-bottom:4px; }
+  .sub { color:var(--dim); font-size:13px; margin-bottom:14px; }
+
+  /* 控制条 */
+  .controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  button { background:#21262d; color:var(--text); border:1px solid var(--border);
+    border-radius:8px; padding:6px 12px; font-size:13px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  .scene-title { font-size:14px; color:var(--gold); font-weight:600; min-width:14em; }
+  .dots { display:flex; gap:6px; align-items:center; }
+  .dot { width:10px; height:10px; border-radius:50%; background:#30363d; cursor:pointer; border:none; padding:0; }
+  .dot.done { background:var(--accent); }
+  .dot.cur  { background:var(--gold); box-shadow:0 0 6px var(--gold); }
+  input[type=range] { width:110px; accent-color:var(--accent); }
+  .speed-label { color:var(--dim); font-size:12px; }
+
+  .layout { display:grid; grid-template-columns:1fr; gap:12px; }
+  @media (min-width:980px) { .layout { grid-template-columns: 3fr 2fr; } }
+
+  .stage { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:8px; }
+  svg { display:block; width:100%; height:auto; }
+
+  .edge { fill:none; opacity:.30; }
+  .edge.hot { opacity:1; }
+  .node circle { fill:var(--panel); stroke-width:2; }
+  .node.in  circle { stroke:var(--node-in); }
+  .node.hid circle { stroke:var(--node-hid); }
+  .node.hid.dead circle { stroke:var(--dead); }
+  .node.hid.dead text { fill:var(--dead); }
+  .node.glow circle { filter:drop-shadow(0 0 8px currentColor); }
+  .node text { fill:var(--text); font-size:13px; text-anchor:middle; dominant-baseline:central; }
+  .layer-label { fill:var(--dim); font-size:13px; text-anchor:middle; }
+  .val-label { fill:var(--dim); font-size:12px; text-anchor:middle; }
+  .hval { font-size:12px; font-weight:600; text-anchor:start; dominant-baseline:central; }
+  .out-arrow { stroke:var(--gold); stroke-width:2; fill:none; opacity:0; }
+  .out-label { fill:var(--gold); font-size:13px; text-anchor:middle; opacity:0; }
+  .show { opacity:1 !important; transition:opacity .4s; }
+
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:14px 16px; font-size:14px; line-height:1.75; min-height:300px; }
+  .panel h2 { font-size:14px; color:var(--accent); margin-bottom:8px; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px;
+    background:#0d1117; border:1px solid var(--border); border-radius:8px;
+    padding:10px 12px; overflow-x:auto; white-space:nowrap; margin:8px 0; }
+  .w-pos { color:var(--pos); } .w-neg { color:var(--neg); }
+  .res { color:var(--node-hid); font-weight:600; }
+  .deadtxt { color:var(--dead); }
+  table.wmat { border-collapse:collapse; margin:8px auto; font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  table.wmat td, table.wmat th { border:1px solid var(--border); padding:3px 9px; text-align:center; }
+  table.wmat th { color:var(--dim); font-weight:400; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>一次完整的前向传播：数据是怎么流过全连接层的</h1>
+  <div class="sub">输入(4) → 每条线乘自己的权重 → 神经元求和+偏置 → ReLU → 输出(5)，送去下一层。权重固定为示例值，h₂ 会"死掉"（z&lt;0 被 ReLU 归零）。</div>
+
+  <div class="controls">
+    <button id="btnPlay">⏸ 暂停</button>
+    <button id="btnPrev">⏮ 上一幕</button>
+    <button id="btnNext">⏭ 下一幕</button>
+    <input type="range" id="speed" min="0.5" max="3" step="0.5" value="1">
+    <span class="speed-label" id="speedLabel">1x</span>
+    <div class="dots" id="dots"></div>
+    <span class="scene-title" id="sceneTitle"></span>
+  </div>
+
+  <div class="layout">
+    <div class="stage"><svg id="svg" viewBox="0 0 900 560"></svg></div>
+    <div class="panel" id="panel"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+const NS='http://www.w3.org/2000/svg';
+const svg=document.getElementById('svg'), panel=document.getElementById('panel');
+
+// ---------- 数据（固定示例，保证叙事稳定） ----------
+const INPUTS=[
+  {name:'x₁',desc:'自己x坐标',val:0.62},
+  {name:'x₂',desc:'敌人x坐标',val:-0.31},
+  {name:'x₃',desc:'自己血量',val:0.85},
+  {name:'x₄',desc:'最近子弹距离',val:-0.47},
+];
+const W=[ // W[i][j]：输入 i → 神经元 j
+  [ 0.35,-0.80, 0.12,-0.05, 0.91],
+  [ 0.40, 0.10,-0.50, 0.60,-0.70],
+  [ 0.16,-0.20, 0.90, 0.10, 1.50],
+  [ 0.03, 0.05,-0.30, 0.20, 0.90],
+];
+const B=[0.20,-0.15,0.10,0.30,0.30];
+const N_IN=4, N_HID=5;
+const Z=[],H=[];
+for(let j=0;j<N_HID;j++){
+  let z=B[j]; for(let i=0;i<N_IN;i++) z+=W[i][j]*INPUTS[i].val;
+  Z.push(z); H.push(Math.max(0,z));
+}
+
+// ---------- 布局 ----------
+const X_IN=160, X_HID=600, X_OUT=830, R=26;
+const TOP_IN=110, GAP_IN=115, TOP_HID=80, GAP_HID=100;
+const inY=i=>TOP_IN+i*GAP_IN, hidY=j=>TOP_HID+j*GAP_HID;
+const SUB='₁₂₃₄₅';
+
+// ---------- 场景 ----------
+const SCENES=[
+  {title:'① 输入：4 个特征值', dur:3},
+  {title:'② 信号沿线流动，乘上各自权重', dur:5},
+  {title:'③ 每个神经元求和 + 偏置', dur:6},
+  {title:'④ ReLU：负数归零，正数通过', dur:4.5},
+  {title:'⑤ 输出 5 个数，送去下一层', dur:3.5},
+];
+const TOTAL=SCENES.reduce((a,s)=>a+s.dur,0);
+const OFFSET=[]; SCENES.reduce((a,s)=>{OFFSET.push(a);return a+s.dur;},0);
+
+// ---------- 静态图 ----------
+const edgeEls=[], nodeIn=[], nodeHid=[], hvalEls=[], outArrows=[];
+function el(t,a){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
+function buildStatic(){
+  svg.innerHTML='';
+  const t1=el('text',{x:X_IN,y:55,class:'layer-label'}); t1.textContent='输入层 (4)';
+  const t2=el('text',{x:X_HID,y:40,class:'layer-label'}); t2.textContent='隐藏层 (5 个神经元)';
+  const t3=el('text',{x:X_OUT,y:55,class:'out-label',id:'outLabel'}); t3.textContent='下一层 →';
+  svg.append(t1,t2,t3);
+  for(let i=0;i<N_IN;i++)for(let j=0;j<N_HID;j++){
+    const p=el('path',{d:`M ${X_IN+R} ${inY(i)} C ${X_IN+160} ${inY(i)}, ${X_HID-160} ${hidY(j)}, ${X_HID-R} ${hidY(j)}`,
+      class:'edge',stroke:W[i][j]>=0?'var(--pos)':'var(--neg)','stroke-width':(1+Math.abs(W[i][j])*2.6).toFixed(2)});
+    svg.appendChild(p); edgeEls.push({el:p,i,j,len:p.getTotalLength()});
+  }
+  for(let i=0;i<N_IN;i++){
+    const g=el('g',{class:'node in'});
+    g.appendChild(el('circle',{cx:X_IN,cy:inY(i),r:R}));
+    const tx=el('text',{x:X_IN,y:inY(i)}); tx.textContent=INPUTS[i].name; g.appendChild(tx);
+    const lb=el('text',{x:X_IN,y:inY(i)+R+18,class:'val-label'}); lb.textContent=`${INPUTS[i].desc} = ${INPUTS[i].val}`; g.appendChild(lb);
+    svg.appendChild(g); nodeIn.push(g);
+  }
+  for(let j=0;j<N_HID;j++){
+    const g=el('g',{class:'node hid'});
+    g.appendChild(el('circle',{cx:X_HID,cy:hidY(j),r:R}));
+    const tx=el('text',{x:X_HID,y:hidY(j)}); tx.textContent='h'+SUB[j]; g.appendChild(tx);
+    svg.appendChild(g); nodeHid.push(g);
+    const hv=el('text',{x:X_HID+R+8,y:hidY(j),class:'hval',fill:Z[j]>=0?'var(--pos)':'var(--dead)'});
+    hv.textContent=''; svg.appendChild(hv); hvalEls.push(hv);
+    const a=el('path',{d:`M ${X_HID+R+64} ${hidY(j)} L ${X_OUT-10} ${hidY(j)}`,class:'out-arrow','marker-end':'url(#arr)'});
+    svg.appendChild(a); outArrows.push(a);
+  }
+  const defs=el('defs',{});
+  const mk=el('marker',{id:'arr',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto-start-reverse'});
+  mk.appendChild(el('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'var(--gold)'}));
+  defs.appendChild(mk); svg.appendChild(defs);
+}
+buildStatic();
+const dyn=el('g',{}); svg.appendChild(dyn);
+
+// ---------- 面板 ----------
+let lastPanelKey='';
+function fmtW(w){return w>=0?`+<span class="w-pos">${w.toFixed(2)}</span>`:`−<span class="w-neg">${Math.abs(w).toFixed(2)}</span>`;}
+function renderPanel(s,p){
+  const key=s+':'+Math.floor(p*7);
+  if(key===lastPanelKey) return; lastPanelKey=key;
+  if(s===0){
+    panel.innerHTML=`<h2>输入就是一个特征向量</h2>
+      坦克当前局面被压缩成 4 个数：<div class="mono">x = [${INPUTS.map(v=>v.val).join(', ')}]</div>
+      每个数是一个<b>标量</b>。真实项目里会有 20 个左右（双方位置/朝向/血量/子弹…），<br>这里用 4 个演示。`;
+  }else if(s===1){
+    let rows='';
+    for(let j=0;j<N_HID;j++){
+      rows+=`<tr><th>h${SUB[j]}</th>${[0,1,2,3].map(i=>`<td class="${W[i][j]>=0?'w-pos':'w-neg'}">${W[i][j].toFixed(2)}</td>`).join('')}</tr>`;
+    }
+    panel.innerHTML=`<h2>每条线 = 一个权重，信号过线时相乘</h2>
+      同一个 x 被复制 5 份，每份乘<b>不同的</b> w：<div class="mono">x₁=0.62  ──×w₁₁=0.35──→ 0.217  (进 h₁)<br>x₁=0.62  ──×w₁₂=-0.80──→ -0.496 (进 h₂)<br>…共 20 条线，20 个权重</div>
+      权重矩阵（行=神经元，列=输入）：
+      <table class="wmat"><tr><th></th><th>x₁</th><th>x₂</th><th>x₃</th><th>x₄</th></tr>${rows}</table>`;
+  }else if(s===2){
+    const j=Math.min(N_HID-1,Math.floor(p*N_HID));
+    const lp=p*N_HID-j;
+    let terms='',z=B[j];
+    const nShow=1+Math.min(N_IN,Math.floor(lp*(N_IN+1)));
+    for(let i=0;i<N_IN;i++){
+      const prod=W[i][j]*INPUTS[i].val;
+      if(i<nShow){ terms+=`${i>0?' ':''}${fmtW(W[i][j])}×${INPUTS[i].name}`; }
+      else { terms+=` <span class="deadtxt">+ …</span>`; break; }
+      z=z; // computed below anyway
+    }
+    const full=`h${SUB[j]} = Σ + b${SUB[j]} = <span class="res">${Z[j].toFixed(3)}</span>`;
+    panel.innerHTML=`<h2>神经元 j = 把它收到的 4 项加起来，再加偏置 b</h2>
+      正在看 h${SUB[j]}：<div class="mono">${terms}<br>${full}</div>
+      5 个神经元<b>各自独立</b>做同一套流程，互不通信。`;
+  }else if(s===3){
+    const pts=Z.map((z,j)=>({z,h:H[j],j}));
+    const px=z=>60+(z+1)/3.2*200, py=h=>130-h/2.1*110;
+    let dotsSvg='';
+    pts.forEach((pt,j)=>{
+      const on=Math.floor(p*6)>j;
+      dotsSvg+=on?`<circle cx="${px(pt.z)}" cy="${py(pt.h)}" r="5" fill="${pt.h>0?'var(--pos)':'var(--dead)'}">
+        <title>h${SUB[j]}: z=${pt.z.toFixed(2)} → ${pt.h.toFixed(2)}</title></circle>`:'';
+    });
+    panel.innerHTML=`<h2>ReLU(z) = max(0, z)：负数全部拍成 0</h2>
+      <svg viewBox="0 0 280 150" style="width:100%;max-width:300px">
+        <line x1="20" y1="130" x2="270" y2="130" stroke="var(--border)"/>
+        <line x1="60" y1="10" x2="60" y2="130" stroke="var(--border)"/>
+        <line x1="20" y1="130" x2="60" y2="130" stroke="var(--accent)" stroke-width="2"/>
+        <line x1="60" y1="130" x2="255" y2="22" stroke="var(--accent)" stroke-width="2"/>
+        <text x="265" y="145" fill="var(--dim)" font-size="11">z</text>
+        <text x="30" y="20" fill="var(--dim)" font-size="11">h</text>
+        ${dotsSvg}
+      </svg>
+      <div class="mono">z = [${Z.map(v=>v.toFixed(2)).join(', ')}]<br>h = [${H.map(v=>v.toFixed(2)).join(', ')}]  <span class="deadtxt">← h₂ 死了</span></div>
+      z&lt;0 的神经元本轮输出 0、<b>不参与决策</b>——这一局 h₂ 相当于不存在。`;
+  }else{
+    panel.innerHTML=`<h2>这一层的输出，就是下一层的输入</h2>
+      <div class="mono">h = [${H.map(v=>v.toFixed(2)).join(', ')}]</div>
+      同样的流程再来一遍：<b>h = ReLU(W·x + b)</b>，<br>
+      直到输出层给出 9 个动作的概率（8 方向移动 + 开火）。<br><br>
+      训练调的就是全部层里所有的 w 和 b。`;
+  }
+}
+
+// ---------- 动态渲染（纯函数 f(t)） ----------
+function locate(t){
+  for(let s=0;s<SCENES.length;s++){
+    if(t<OFFSET[s]+SCENES[s].dur||s===SCENES.length-1)
+      return {s, p:Math.min(1,Math.max(0,(t-OFFSET[s])/SCENES[s].dur))};
+  }
+}
+function render(t){
+  const {s,p}=locate(t);
+  dyn.innerHTML='';
+  // 重置节点状态
+  nodeHid.forEach((g,j)=>{g.classList.toggle('dead',s>=3&&Z[j]<0);g.classList.remove('glow');});
+  nodeIn.forEach(g=>g.classList.remove('glow'));
+  hvalEls.forEach((e,j)=>e.textContent=(s>=3)?(Z[j]<0?'0 ⛔':H[j].toFixed(3)):'');
+  outArrows.forEach(a=>a.classList.toggle('show',s===4));
+  document.getElementById('outLabel').classList.toggle('show',s===4);
+
+  if(s===0){ // 输入依次点亮
+    nodeIn.forEach((g,i)=>{ if(p*(N_IN+0.5)>i) g.classList.add('glow'); });
+  }else if(s===1){ // 脉冲沿线流动
+    edgeEls.forEach(({el:pth,i,j,len})=>{
+      const start=(i*N_HID+j)/(N_IN*N_HID)*0.55;
+      const lp=(p-start)/0.4;
+      if(lp>0&&lp<1){
+        const pt=pth.getPointAtLength(len*lp);
+        dyn.appendChild(el('circle',{cx:pt.x,cy:pt.y,r:4,fill:W[i][j]>=0?'var(--pos)':'var(--neg)'}));
+        pth.classList.add('hot');
+      } else pth.classList.remove('hot');
+    });
+  }else if(s===2){ // 逐神经元高亮 + 求和动画
+    const j=Math.min(N_HID-1,Math.floor(p*N_HID));
+    nodeHid[j].classList.add('glow');
+    edgeEls.forEach(e=>e.el.classList.toggle('hot',e.j===j));
+  }else if(s===3){
+    edgeEls.forEach(e=>e.el.classList.remove('hot'));
+  }else if(s===4){ // 输出脉冲
+    outArrows.forEach((a,j)=>{
+      if(H[j]<=0) return;
+      const lp=(p- j*0.12)/0.5;
+      if(lp>0&&lp<1){
+        const len=a.getTotalLength();
+        const pt=a.getPointAtLength(len*lp);
+        dyn.appendChild(el('circle',{cx:pt.x,cy:pt.y,r:4,fill:'var(--gold)'}));
+      }
+    });
+  }
+  // 控制条状态
+  document.getElementById('sceneTitle').textContent=SCENES[s].title;
+  document.querySelectorAll('.dot').forEach((d,k)=>{
+    d.classList.toggle('cur',k===s); d.classList.toggle('done',k<s);
+  });
+  renderPanel(s,p);
+}
+
+// ---------- 播放循环 ----------
+let playing=true, speed=1, t=0, last=0;
+const qp=new URLSearchParams(location.search);
+if(qp.has('s')){
+  const s=Math.min(SCENES.length-1,+qp.get('s')||0);
+  t=OFFSET[s]+(+qp.get('t')||0); playing=false;
+}
+function frame(ts){
+  const dt=Math.min(0.05,(ts-last)/1000||0); last=ts;
+  if(playing){ t+=dt*speed; if(t>=TOTAL) t=0; }
+  render(t);
+  requestAnimationFrame(frame);
+}
+// 控制条
+const dotsEl=document.getElementById('dots');
+SCENES.forEach((s2,k)=>{
+  const d=document.createElement('button'); d.className='dot'; d.title=s2.title;
+  d.onclick=()=>{t=OFFSET[k];}; dotsEl.appendChild(d);
+});
+document.getElementById('btnPlay').onclick=function(){
+  playing=!playing; this.textContent=playing?'⏸ 暂停':'▶ 播放';
+};
+document.getElementById('btnPrev').onclick=()=>{const{s}=locate(t);t=OFFSET[Math.max(0,s-1)];};
+document.getElementById('btnNext').onclick=()=>{const{s}=locate(t);t=OFFSET[Math.min(SCENES.length-1,s+1)];};
+document.getElementById('speed').oninput=function(){
+  speed=+this.value; document.getElementById('speedLabel').textContent=speed+'x';
+};
+render(t);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

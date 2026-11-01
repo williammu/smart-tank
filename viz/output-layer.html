@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>输出层细节：隐藏层②(128) → 9 个动作 → softmax</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#e6edf3; --dim:#8b949e;
+    --pos:#3fb950; --neg:#f85149; --accent:#58a6ff; --node-hid:#d2a8ff;
+    --dead:#6e7681; --gold:#e3b341;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    min-height:100vh; padding:24px 16px; }
+  .wrap { max-width:1120px; margin:0 auto; }
+  h1 { font-size:20px; font-weight:600; margin-bottom:4px; }
+  .sub { color:var(--dim); font-size:13px; margin-bottom:14px; }
+  .toolbar { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center; }
+  button { background:#21262d; color:var(--text); border:1px solid var(--border);
+    border-radius:8px; padding:6px 14px; font-size:13px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  .hint { color:var(--dim); font-size:12px; }
+
+  .stage { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:8px; }
+  svg { display:block; width:100%; height:auto; }
+
+  .haze { stroke:#8b949e; stroke-width:.6; opacity:.05; }
+  .hdot { cursor:pointer; stroke:var(--node-hid); stroke-width:1; }
+  .hdot.dead { stroke:var(--dead); fill:var(--panel) !important; }
+  .hdot:hover { stroke:#fff; }
+  .layer-label { fill:var(--dim); font-size:13px; text-anchor:middle; }
+  .onode circle { fill:var(--panel); stroke:var(--accent); stroke-width:2; cursor:pointer; }
+  .onode text { fill:var(--text); font-size:15px; text-anchor:middle; dominant-baseline:central; pointer-events:none; }
+  .onode.max circle { stroke:var(--gold); filter:drop-shadow(0 0 8px var(--gold)); }
+  .onode.picked circle { stroke:var(--gold); stroke-width:3; }
+  .aname { fill:var(--text); font-size:12px; }
+  .zval { fill:var(--dim); font-size:11px; font-family:ui-monospace,Menlo,monospace; }
+  .pval { fill:var(--gold); font-size:11px; font-family:ui-monospace,Menlo,monospace; font-weight:600; }
+  .pbar { fill:var(--accent); opacity:.85; transition:width .5s ease, x .5s ease; rx:3; }
+  .pbar.max { fill:var(--gold); }
+  .hov-edge { fill:none; opacity:.9; }
+
+  .info { display:grid; grid-template-columns:1fr; gap:12px; margin-top:12px; }
+  @media (min-width:900px) { .info { grid-template-columns:1.3fr 1fr; } }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:14px 16px; font-size:14px; line-height:1.75; }
+  .card h2 { font-size:14px; color:var(--accent); margin-bottom:8px; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px;
+    background:#0d1117; border:1px solid var(--border); border-radius:8px;
+    padding:10px 12px; overflow-x:auto; white-space:nowrap; margin:8px 0; }
+  .w-pos{color:var(--pos);} .w-neg{color:var(--neg);} .res{color:var(--node-hid);font-weight:600;}
+  .gold{color:var(--gold);font-weight:600;} .deadtxt{color:var(--dead);}
+  table.ctb { border-collapse:collapse; font-family:ui-monospace,Menlo,monospace; font-size:12px; margin:6px 0; }
+  table.ctb td, table.ctb th { border:1px solid var(--border); padding:2px 8px; text-align:right; }
+  table.ctb th { color:var(--dim); font-weight:400; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>输出层细节：128 个数 → 9 个动作的概率</h1>
+  <div class="sub">z = W³·h² + b³（不过 ReLU，负分也是信息）→ softmax 压成概率 → 对战取最大 / 训练按概率采样。这一层有 128×9 = 1152 个权重 + 9 个偏置。灰色神经元 = 上一层 ReLU 归零的"死"神经元，乘任何权重贡献都是 0。</div>
+
+  <div class="toolbar">
+    <button id="btnNew">🎲 换一个局面（重随机 h²）</button>
+    <button id="btnSample">🎯 按当前概率采样一个动作（训练模式）</button>
+    <span class="hint">悬停左侧神经元 → 看它的 9 条线 ｜ 点击右侧动作 → 看它的 128 项求和</span>
+  </div>
+
+  <div class="stage"><svg id="svg" viewBox="0 0 1000 620"></svg></div>
+
+  <div class="info">
+    <div class="card" id="detailCard">
+      <h2>细节</h2>
+      <div id="detail">悬停一个神经元，或点击一个动作节点。</div>
+    </div>
+    <div class="card">
+      <h2>softmax：把 9 个任意分数压成概率</h2>
+      <div class="mono">P(动作k) = e<sup>z<sub>k</sub></sup> / Σ e<sup>z<sub>i</sub></sup></div>
+      指数函数让高分者更高、低分趋近 0，且 9 个概率相加恒等于 1。<br><br>
+      <b>为什么输出层不过 ReLU：</b>z 是"每个动作有多好"的打分，负分 = "这个动作很糟"，是合法信息，砍掉就丢了。<br><br>
+      <b>怎么用：</b>对战时取 P 最大的动作（金色光环）；训练时按 P 随机采样——P=5% 的烂动作也有 5% 机会被试，这是"探索"的来源。
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+const NS='http://www.w3.org/2000/svg';
+const svg=document.getElementById('svg'), detail=document.getElementById('detail');
+
+// ---------- 确定性伪随机 ----------
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;}}
+
+const NH=128, NA=9;
+const ACTIONS=[
+  {icon:'↑',name:'上移'},{icon:'↓',name:'下移'},{icon:'←',name:'左移'},{icon:'→',name:'右移'},
+  {icon:'↖',name:'左上'},{icon:'↗',name:'右上'},{icon:'↙',name:'左下'},{icon:'↘',name:'右下'},
+  {icon:'🔥',name:'开火'},
+];
+
+// 权重 W³：W[k][i] = 神经元 i → 动作 k（小数值，128 项求和才不会爆）
+let seed=20260927;
+let rng=mulberry32(seed);
+const W=[],Bb=[];
+for(let k=0;k<NA;k++){W.push([]);for(let i=0;i<NH;i++)W[k].push(+(rng()*0.3-0.15).toFixed(3));Bb.push(+(rng()*1-0.5).toFixed(2));}
+
+// 当前局面 h²（128 个数，约 35% 是 0——上一层 ReLU 的产物）
+let h=[];
+function newState(s){
+  const r=mulberry32(s);
+  h=[];for(let i=0;i<NH;i++)h.push(r()<0.35?0:+(r()*2).toFixed(3));
+}
+newState(seed);
+
+function compute(){
+  const z=Bb.map((b,k)=>{let s=b;for(let i=0;i<NH;i++)s+=W[k][i]*h[i];return s;});
+  const mx=Math.max(...z), ex=z.map(v=>Math.exp(v-mx)), sum=ex.reduce((a,b)=>a+b,0);
+  const P=ex.map(v=>v/sum);
+  return {z,P};
+}
+
+// ---------- 布局 ----------
+const GY0=95, GROW=27, GCOL=22, GX0=70;      // 神经元网格 8 列 × 16 行
+const OX=560, OR=24, OY0=75, OGAP=58;        // 输出节点
+const BARX=650, BARW=270;
+const gx=i=>GX0+(i%8)*GCOL, gy=i=>GY0+Math.floor(i/8)*GROW, oy=k=>OY0+k*OGAP;
+
+function el(t,a){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
+
+// ---------- 静态结构 ----------
+const dotEls=[], barEls=[], pctEls=[], zEls=[], onodeEls=[];
+function build(){
+  svg.innerHTML='';
+  const t1=el('text',{x:GX0+3.5*GCOL,y:60,class:'layer-label'}); t1.textContent='隐藏层②（128 个神经元，每个 = 一个数）';
+  const t2=el('text',{x:OX,y:40,class:'layer-label'}); t2.textContent='输出层（9 个动作）';
+  const t3=el('text',{x:BARX+BARW/2,y:40,class:'layer-label'}); t3.textContent='softmax 后的概率 P';
+  svg.append(t1,t2,t3);
+
+  // 1152 条“雾线”：表达这一层的连接密度
+  const haze=el('g',{});
+  for(let i=0;i<NH;i++)for(let k=0;k<NA;k++)
+    haze.appendChild(el('line',{x1:gx(i),y1:gy(i),x2:OX-OR,y2:oy(k),class:'haze'}));
+  svg.appendChild(haze);
+
+  // 神经元点
+  for(let i=0;i<NH;i++){
+    const c=el('circle',{cx:gx(i),cy:gy(i),r:6,class:'hdot','data-i':i});
+    c.addEventListener('mouseenter',()=>hoverNeuron(i));
+    c.addEventListener('mouseleave',clearHover);
+    svg.appendChild(c); dotEls.push(c);
+  }
+  // 悬停连线层
+  const hg=el('g',{id:'hovG'}); svg.appendChild(hg);
+
+  // 输出节点 + 概率条
+  for(let k=0;k<NA;k++){
+    const g=el('g',{class:'onode','data-k':k});
+    g.appendChild(el('circle',{cx:OX,cy:oy(k),r:OR}));
+    const tx=el('text',{x:OX,y:oy(k)}); tx.textContent=ACTIONS[k].icon; g.appendChild(tx);
+    g.addEventListener('click',()=>selectAction(k));
+    svg.appendChild(g); onodeEls.push(g);
+
+    const nm=el('text',{x:OX+OR+8,y:oy(k)-14,class:'aname'}); nm.textContent=ACTIONS[k].name;
+    const zv=el('text',{x:OX+OR+8,y:oy(k)+18,class:'zval'});
+    const bar=el('rect',{x:BARX,y:oy(k)-8,height:16,class:'pbar'});
+    const pv=el('text',{x:BARX,y:oy(k)-14,class:'pval'});
+    svg.append(nm,zv,bar,pv);
+    barEls.push(bar); pctEls.push(pv); zEls.push(zv);
+  }
+}
+build();
+const hovG=svg.querySelector('#hovG');
+
+// ---------- 渲染 ----------
+let picked=-1, selAction=-1;
+function deadCount(){return h.filter(v=>v===0).length;}
+function render(){
+  const {z,P}=compute();
+  const kMax=P.indexOf(Math.max(...P));
+  for(let i=0;i<NH;i++){
+    const c=dotEls[i];
+    if(h[i]===0){c.setAttribute('class','hdot dead');c.setAttribute('fill','var(--panel)');}
+    else{
+      c.setAttribute('class','hdot');
+      // 值越大颜色越深（紫）
+      const a=0.25+0.75*Math.min(1,h[i]/2);
+      c.setAttribute('fill',`rgba(210,168,255,${a.toFixed(2)})`);
+    }
+  }
+  for(let k=0;k<NA;k++){
+    barEls[k].setAttribute('width',(P[k]*BARW).toFixed(1));
+    barEls[k].setAttribute('class','pbar'+(k===kMax?' max':''));
+    pctEls[k].textContent=(P[k]*100).toFixed(1)+'%';
+    zEls[k].textContent='z='+z[k].toFixed(2);
+    onodeEls[k].setAttribute('class','onode'+(k===kMax?' max':'')+(k===picked?' picked':''));
+  }
+}
+function hoverNeuron(i){
+  hovG.innerHTML='';
+  for(let k=0;k<NA;k++){
+    const w=W[k][i];
+    hovG.appendChild(el('path',{d:`M ${gx(i)} ${gy(i)} C ${gx(i)+140} ${gy(i)}, ${OX-OR-140} ${oy(k)}, ${OX-OR} ${oy(k)}`,
+      class:'hov-edge',stroke:w>=0?'var(--pos)':'var(--neg)','stroke-width':(0.8+Math.abs(w)*10).toFixed(2)}));
+  }
+  const contrib=W.map((w,k)=>({k,c:w*h[i],w})).sort((a,b)=>Math.abs(b.c)-Math.abs(a.c));
+  let rows=contrib.slice(0,4).map(o=>
+    `<tr><td>${ACTIONS[o.k].icon} ${ACTIONS[o.k].name}</td><td class="${o.w>=0?'w-pos':'w-neg'}">${o.w.toFixed(3)}</td><td>${o.c.toFixed(4)}</td></tr>`).join('');
+  detail.innerHTML= h[i]===0
+    ? `神经元 h²<sub>${i}</sub> = <span class="deadtxt">0</span> —— 上一层 ReLU 把它归零了。<br>
+       它的 9 条线权重再大也没用：<b>0 × 任何 w = 0</b>，对 9 个动作的贡献全是 0。这就是"死神经元不参与决策"。`
+    : `神经元 h²<sub>${i}</sub> = <span class="res">${h[i]}</span>，它被复制 9 份，分别乘 9 个权重送进 9 个动作的求和：
+       <table class="ctb"><tr><th>动作</th><th>权重 w</th><th>贡献 w·h</th></tr>${rows}<tr><td colspan="3" style="text-align:center;color:var(--dim)">… 其余 5 个动作同理</td></tr></table>
+       它对哪个动作影响最大，取决于哪条线权重最大。`;
+}
+function clearHover(){hovG.innerHTML='';detail.innerHTML='悬停一个神经元，或点击一个动作节点。';}
+function selectAction(k){
+  selAction=k;
+  const {z,P}=compute();
+  const contrib=h.map((hv,i)=>({i,c:W[k][i]*hv,w:W[k][i],hv})).sort((a,b)=>Math.abs(b.c)-Math.abs(a.c));
+  let rows=contrib.slice(0,5).map(o=>
+    `<tr><td>h²<sub>${o.i}</sub></td><td>${o.hv}</td><td class="${o.w>=0?'w-pos':'w-neg'}">${o.w.toFixed(3)}</td><td>${o.c.toFixed(4)}</td></tr>`).join('');
+  detail.innerHTML=
+    `动作「${ACTIONS[k].icon} ${ACTIONS[k].name}」的打分 = <b>128 项乘积求和 + 偏置</b>：
+     <div class="mono">z<sub>${k}</sub> = Σᵢ W³[${k},i]·h²ᵢ + b<sub>${k}</sub> = <span class="res">${z[k].toFixed(3)}</span>  →  P = <span class="gold">${(P[k]*100).toFixed(1)}%</span></div>
+     贡献最大的 5 个神经元（共 128 项，其中 ${deadCount()} 项因 h²=0 恒为 0）：
+     <table class="ctb"><tr><th>神经元</th><th>h² 值</th><th>权重 w</th><th>贡献</th></tr>${rows}</table>
+     每个动作都有自己的 128 个权重（W³ 的一行），所以同一局面对 9 个动作打出 9 个不同的分。`;
+}
+
+// ---------- 工具栏 ----------
+document.getElementById('btnNew').onclick=()=>{
+  seed=Math.floor(Math.random()*1e9); newState(seed); picked=-1; clearHover(); render();
+};
+document.getElementById('btnSample').onclick=()=>{
+  const {P}=compute();
+  let r=Math.random(),acc=0; picked=NA-1;
+  for(let k=0;k<NA;k++){acc+=P[k];if(r<acc){picked=k;break;}}
+  render();
+  detail.innerHTML=`采样结果：<span class="gold">${ACTIONS[picked].icon} ${ACTIONS[picked].name}</span>
+    （它的 P=${(P[picked]*100).toFixed(1)}%）。<br>训练时就是这样按概率抽签——概率低的动作也有机会被尝试，尝试结果好，它的权重下次就会被调高。`;
+};
+
+// URL 参数便于验证：?action=k / ?hover=i
+const qp=new URLSearchParams(location.search);
+render();
+if(qp.has('action')) selectAction(+qp.get('action'));
+if(qp.has('hover')) hoverNeuron(+qp.get('hover'));
+})();
+</script>
+</body>
+</html>

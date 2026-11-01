@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>反向传播的魔法 · 一遍算出全部的锅</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 14px 16px 20px; background: #0d1117; color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  h1 { font-size: 17px; margin: 0 0 2px; }
+  .sub { color: #8b949e; font-size: 12.5px; margin-bottom: 10px; }
+  .cv-wrap { position: relative; width: 100%; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #narr {
+    margin-top: 10px; background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+    padding: 10px 14px; font-size: 14px; line-height: 1.6;
+  }
+  #narr .f { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #79c0ff; font-size: 13px; }
+  #narr .hot { color: #f0883e; font-weight: 600; }
+  .controls { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .controls button {
+    background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 8px;
+    padding: 5px 14px; font-size: 13px; cursor: pointer;
+  }
+  .controls button:hover { border-color: #58a6ff; }
+  .dots { display: flex; gap: 6px; align-items: center; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #30363d; cursor: pointer; border: 1px solid #484f58; }
+  .dot.cur { background: #f0883e; }
+  .dot.done { background: #8b949e; }
+  #scene-title { font-size: 13px; color: #8b949e; }
+  input[type=range] { width: 90px; }
+</style>
+</head>
+<body>
+<h1>反向传播的魔法：一遍逆流，22,021 份锅全到账</h1>
+<div class="sub">迷你网络 2→2→2（数字与笔记里的手算版完全一致）· 蓝=前向信号 · 橙=逆流的锅 · 灰=死神经元</div>
+<div class="cv-wrap" id="wrap"><canvas id="cv"></canvas></div>
+<div id="narr"></div>
+<div class="controls">
+  <button id="play">⏸ 暂停</button>
+  <button id="prev">⏮ 上一幕</button>
+  <button id="next">⏭ 下一幕</button>
+  <div class="dots" id="dots"></div>
+  <span id="scene-title"></span>
+  <span style="flex:1"></span>
+  <span style="font-size:12px;color:#8b949e">速度</span>
+  <input type="range" id="speed" min="0.5" max="3" step="0.5" value="1">
+</div>
+
+<script>
+"use strict";
+// ============ 数据（与笔记手算版逐位一致） ============
+const X = [1, 2];
+const W1 = [[0.5, -0.5], [0.3, 0.2]];           // [hidden][in]
+const Z1 = [-0.5, 0.7], H1 = [0, 0.7];          // 1 号隐藏神经元死了
+const W2 = [[1.0, -1.0], [0.5, 0.5]];           // [out][hidden]
+const Z2 = [-0.7, 0.35], P = [0.26, 0.74], Y = [0, 1], LOSS = 0.30;
+const DZ = [0.26, -0.26];                        // P − y：起手式
+const DW2 = [[0, 0.18], [0, -0.18]];             // dz ⊗ h
+const DH = [0.13, -0.39];                        // W2ᵀ dz
+const DZ1 = [0, -0.39];                          // ReLU 闸门后
+const DW1 = [[0, 0], [-0.39, -0.78]];            // dz¹ ⊗ x
+const LEDGER = [
+  ["W¹₁₁", "0"], ["W¹₁₂", "0"], ["W¹₂₁", "−0.39"], ["W¹₂₂", "−0.78"],
+  ["b¹₁", "0"], ["b¹₂", "−0.39"],
+  ["W²₁₁", "0"], ["W²₁₂", "+0.18"], ["W²₂₁", "0"], ["W²₂₂", "−0.18"],
+  ["b²₁", "+0.26"], ["b²₂", "−0.26"],
+];
+const NEW = { z1: [null, 0.93], z2: [-0.98, 0.51], p: [0.18, 0.82], loss: 0.20 };
+
+const SCENES = [
+  { dur: 8, t: "① 前向记账：信号顺线流，中间值全记下（1 号神经元死了）",
+    f: "z¹ = W¹x = [−0.5, 0.7] → h = ReLU = [0, 0.7] → z = W²h = [−0.7, 0.35] → P = softmax = [0.26, 0.74] → loss = −log(0.74) = <b>0.30</b>" },
+  { dur: 5, t: "② 起手式：loss 对 z 的锅 = P − y（预测 − 答案）",
+    f: "dz = [0.26, 0.74] − [0, 1] = <span class=hot>[+0.26, −0.26]</span> —— 洪水的源头" },
+  { dur: 6, t: "③ 锅逆流·输出层：乘法边按「×搭档」分锅",
+    f: "dW² = dz ⊗ h：h₁=0 的两条边 <span class=hot>领 0</span>（没出力就无责）；h₂=0.7 的两条边领 [+0.18, −0.18] · 下传 dh = W²ᵀdz = [+0.13, −0.39]" },
+  { dur: 5, t: "④ ReLU 闸门：前向死了的神经元，锅直接清零",
+    f: "h₁ 前向 z=−0.5 <span class=hot>已死</span> → +0.13 的锅被闸门挡下 → dz¹ = [0, −0.39]（它没参与决策，自然不担责）" },
+  { dur: 5, t: "⑤ 锅到输入层：W¹ 四条边领锅，x 是数据不担责",
+    f: "dW¹ = dz¹ ⊗ x：h₁ 整行 <span class=hot>0</span>（死人免责），h₂ 领 [−0.39, −0.78]（x₂=2 比 x₁=1 责任大一倍——锅 × 搭档）" },
+  { dur: 9, t: "⑥ 一次反向 = 12 份锅全到账 → 拧旋钮 → loss 0.30 → 0.20",
+    f: "笨办法：12 个权重 × 逐个拧动 = <b>12 次前向</b> · 链式法则：<span class=hot>1 次反向</span> · w −= 0.1×锅 → 重跑前向：P(类别1) 0.74→0.82，loss 0.30→<b>0.20</b> ✓" },
+];
+const TOTAL = SCENES.reduce((s, c) => s + c.dur, 0);
+
+// ============ 画布 & 布局 ============
+const wrap = document.getElementById("wrap"), cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const DPR = Math.min(2, window.devicePixelRatio || 1);
+let W = 1000, H = 560, K = 1;                    // K = 全局缩放
+// 节点坐标（每次 resize 重算）：in/hid/out 各 2 个 + loss
+const N = { in: [[], []], hid: [[], []], out: [[], []], loss: [] };
+function layout() {
+  W = wrap.clientWidth;
+  const narrow = W < 700;
+  H = narrow ? 620 : (W < 1000 ? 560 : 520);
+  wrap.style.height = H + "px";
+  cv.width = W * DPR; cv.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  K = Math.max(0.55, Math.min(1.1, W / 1100));
+  const cy = H * (narrow ? 0.40 : 0.42), gap = H * (narrow ? 0.13 : 0.15);
+  const xs = narrow ? [0.16, 0.44, 0.72, 0.90] : [0.15, 0.42, 0.69, 0.90];
+  for (let i = 0; i < 2; i++) {
+    N.in[i]  = [xs[0] * W, cy + (i ? gap : -gap)];
+    N.hid[i] = [xs[1] * W, cy + (i ? gap : -gap)];
+    N.out[i] = [xs[2] * W, cy + (i ? gap : -gap)];
+  }
+  N.loss = [xs[3] * W, cy];
+}
+layout();
+addEventListener("resize", layout);
+
+// ============ 播放状态 ============
+const CUM = [0]; SCENES.forEach(s => CUM.push(CUM[CUM.length - 1] + s.dur));
+let t = 0, last = 0, playing = true, speed = 1;
+const qs = new URLSearchParams(location.search);
+if (qs.get("s") !== null) { t = CUM[+qs.get("s")] + +(qs.get("t") || 0); playing = false; }
+
+// ============ 小工具 ============
+const R = () => Math.max(15, 26 * K);
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const ease = p => p * p * (3 - 2 * p);
+function lerp(a, b, p) { return a + (b - a) * p; }
+function txt(s, x, y, size, color, align = "center", bold = false) {
+  ctx.font = `${bold ? "700 " : ""}${Math.round(size * K)}px -apple-system,"PingFang SC",sans-serif`;
+  ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = "middle";
+  ctx.fillText(s, x, y);
+}
+function edge(a, b, w, alpha = 1) {  // 权重边：绿正红负，粗细=|w|
+  ctx.strokeStyle = w >= 0 ? "rgba(63,185,80," + 0.55 * alpha + ")" : "rgba(248,81,73," + 0.55 * alpha + ")";
+  ctx.lineWidth = (1 + Math.abs(w) * 2.2) * K;
+  ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+}
+function edgeLabel(a, b, s, color, dy = -10) {
+  txt(s, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2 + dy * K, 11.5, color);
+}
+function pulse(a, b, p, color, r = 4.5) {
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(lerp(a[0], b[0], p), lerp(a[1], b[1], p), r * K, 0, 7); ctx.fill();
+}
+function node(pos, inner, sub, color, dead = false) {
+  const r = R();
+  ctx.beginPath(); ctx.arc(pos[0], pos[1], r, 0, 7);
+  ctx.fillStyle = dead ? "#21262d" : "#161b22"; ctx.fill();
+  ctx.strokeStyle = dead ? "#484f58" : color; ctx.lineWidth = 2 * K; ctx.stroke();
+  txt(inner, pos[0], pos[1] - (sub ? 6 * K : 0), 13, dead ? "#6e7681" : "#e6edf3");
+  if (sub) txt(sub, pos[0], pos[1] + 11 * K, 10.5, dead ? "#6e7681" : "#8b949e");
+}
+function badge(pos, s, color) {  // 锅的小圆牌
+  txt(s, pos[0], pos[1] - R() - 14 * K, 12.5, color, "center", true);
+}
+
+// 边定义：[from, to, w, dw]
+const EDGES1 = [[0, 0], [1, 0], [0, 1], [1, 1]]; // in→hid: [inIdx][hidIdx]
+function w1(i, j) { return W1[j][i]; }
+function dw1(i, j) { return DW1[j][i]; }
+
+// ============ 场景绘制 ============
+function drawBase(alphaEdge = 1, showForward = false, newWeights = false) {
+  // 输入→隐藏
+  for (const [i, j] of EDGES1) edge(N.in[i], N.hid[j], w1(i, j), alphaEdge);
+  // 隐藏→输出
+  for (let o = 0; o < 2; o++) for (let h = 0; h < 2; h++) {
+    const w = newWeights && o === 1 && h === 1 ? 0.52 : (newWeights && o === 0 && h === 1 ? -1.02 : W2[o][h]);
+    edge(N.hid[h], N.out[o], w, alphaEdge);
+  }
+  // 输出→loss
+  for (let o = 0; o < 2; o++) {
+    ctx.strokeStyle = "rgba(139,148,158,0.5)"; ctx.lineWidth = 1.5 * K;
+    ctx.beginPath(); ctx.moveTo(N.out[o][0], N.out[o][1]); ctx.lineTo(N.loss[0], N.loss[1]); ctx.stroke();
+  }
+}
+function drawNodes(stage) {
+  node(N.in[0], "x₁", "1", "#79c0ff");
+  node(N.in[1], "x₂", "2", "#79c0ff");
+  const h2v = stage.newW ? 0.93 : 0.7;
+  node(N.hid[0], "h₁", stage.relu === false ? "z=−0.5" : "死", "#3fb950", true);
+  node(N.hid[1], "h₂", String(h2v), "#3fb950");
+  const p1 = stage.newW ? 0.18 : 0.26, p2 = stage.newW ? 0.82 : 0.74;
+  node(N.out[0], "z₁", "P=" + p1.toFixed(2), "#a371f7");
+  node(N.out[1], "z₂", "P=" + p2.toFixed(2) + " ←答案", "#a371f7");
+  const loss = stage.newW ? 0.20 : 0.30;
+  node(N.loss, "loss", loss.toFixed(2), stage.newW ? "#3fb950" : "#f0883e");
+}
+function forwardFlow(tp, newW = false) {  // 前向脉冲波（tp∈[0,1)）
+  const waves = [[0, 0.35], [0.3, 0.65], [0.6, 1]];
+  for (const [i, j] of EDGES1) {
+    if (j === 0) continue;  // 死神经元不进信号（演示简洁）
+    const p = clamp01((tp - waves[0][0]) / (waves[0][1] - waves[0][0]));
+    if (p > 0 && p < 1) pulse(N.in[i], N.hid[j], p, "#79c0ff");
+  }
+  const p2 = clamp01((tp - waves[1][0]) / 0.35);
+  if (p2 > 0 && p2 < 1) for (let o = 0; o < 2; o++) pulse(N.hid[1], N.out[o], p2, "#79c0ff");
+  const p3 = clamp01((tp - waves[2][0]) / 0.4);
+  if (p3 > 0 && p3 < 1) for (let o = 0; o < 2; o++) pulse(N.out[o], N.loss, p3, "#79c0ff");
+}
+
+function scene0(tp) {
+  drawBase(); drawNodes({});
+  forwardFlow(tp);
+  if (tp > 0.35) txt("z¹=[−0.5, 0.7] 记下", N.hid[0][0] + 60 * K, N.hid[0][1] - 60 * K, 11.5, "#8b949e", "left");
+  if (tp > 0.55) txt("1 号死了 → ReLU 输出 0", N.hid[0][0], N.hid[0][1] + R() + 16 * K, 11.5, "#6e7681");
+  if (tp > 0.7) txt("前向走完，账本记满（z、h、P 全留着，等下分锅要用）", W / 2, H * 0.82, 13, "#8b949e");
+}
+
+function scene1(tp) {
+  drawBase(); drawNodes({});
+  const a = ease(clamp01(tp / 0.4));
+  ctx.globalAlpha = a;
+  // P vs y 对照
+  txt("P = [0.26, 0.74]", N.out[0][0] + 30 * K, N.out[0][1] - 62 * K, 13, "#a371f7", "left", true);
+  txt("y = [   0,    1]（答案：类别1）", N.out[0][0] + 30 * K, N.out[0][1] - 44 * K, 12, "#8b949e", "left");
+  ctx.globalAlpha = ease(clamp01((tp - 0.35) / 0.4));
+  badge(N.out[0], "锅 +0.26", "#f0883e");
+  badge(N.out[1], "锅 −0.26", "#f0883e");
+  txt("∂loss/∂z = P − y", N.out[0][0] + 30 * K, N.out[0][1] - 24 * K, 13, "#f0883e", "left", true);
+  ctx.globalAlpha = 1;
+}
+
+function scene2(tp) {
+  drawBase(); drawNodes({});
+  // 橙色锅脉冲：输出 → 隐藏（逆流！）
+  const p = ease(clamp01(tp / 0.45));
+  for (let o = 0; o < 2; o++) for (let h = 0; h < 2; h++) {
+    if (p > 0 && p < 1) pulse(N.out[o], N.hid[h], p, "#f0883e");
+  }
+  if (tp > 0.5) {  // dW² 到账
+    const a = ease(clamp01((tp - 0.5) / 0.3));
+    ctx.globalAlpha = a;
+    edgeLabel(N.hid[0], N.out[0], "0", "#f0883e", -14);
+    edgeLabel(N.hid[1], N.out[0], "+0.18", "#f0883e", -14);
+    edgeLabel(N.hid[0], N.out[1], "0", "#f0883e", 16);
+    edgeLabel(N.hid[1], N.out[1], "−0.18", "#f0883e", 16);
+  }
+  if (tp > 0.72) {  // dh 下传
+    badge(N.hid[0], "锅 +0.13", "#f0883e");
+    badge(N.hid[1], "锅 −0.39", "#f0883e");
+  }
+  ctx.globalAlpha = 1;
+}
+
+function scene3(tp) {
+  drawBase(); drawNodes({});
+  badge(N.hid[0], "锅 +0.13", "#f0883e");
+  badge(N.hid[1], "锅 −0.39", "#f0883e");
+  const a = ease(clamp01(tp / 0.35));
+  ctx.globalAlpha = a;
+  // 闸门：h1 红叉（挡住），h2 绿勾（放行）
+  txt("🚫 闸门：死了 → 锅清零", N.hid[0][0], N.hid[0][1] + R() + 18 * K, 12, "#f85149", "center", true);
+  txt("✓ 放行 −0.39", N.hid[1][0], N.hid[1][1] + R() + 18 * K, 12, "#3fb950", "center", true);
+  ctx.globalAlpha = 1;
+}
+
+function scene4(tp) {
+  drawBase(); drawNodes({});
+  const p = ease(clamp01(tp / 0.45));
+  for (const [i, j] of EDGES1) {
+    if (j === 0 && tp < 0.5) continue;  // 死人那边连脉冲都不发
+    if (p > 0 && p < 1) pulse(N.hid[j], N.in[i], p, "#f0883e");
+  }
+  if (tp > 0.5) {
+    const a = ease(clamp01((tp - 0.5) / 0.3));
+    ctx.globalAlpha = a;
+    edgeLabel(N.in[0], N.hid[0], "0", "#f0883e", -14);
+    edgeLabel(N.in[1], N.hid[0], "0", "#f0883e", 16);
+    edgeLabel(N.in[0], N.hid[1], "−0.39", "#f0883e", -14);
+    edgeLabel(N.in[1], N.hid[1], "−0.78", "#f0883e", 16);
+    txt("x 是数据不是旋钮 → 不担责", N.in[0][0], N.in[1][1] + R() + 20 * K, 12, "#8b949e");
+  }
+  ctx.globalAlpha = 1;
+}
+
+function scene5(tp) {
+  const newW = tp > 0.62;
+  drawBase(1, false, newW); drawNodes({ newW });
+  // ---- 责任账面板（左下半区） ----
+  const px = W * 0.05, py = H * 0.66, cw = Math.min(150 * K, (W * 0.42) / 4), ch = 30 * K;
+  txt("责 任 账（12 份锅）", px, py - 14 * K, 13, "#f0883e", "left", true);
+  for (let i = 0; i < 12; i++) {
+    const row = Math.floor(i / 4), col = i % 4;
+    const lit = clamp01((tp * 9 - 0.3 - i * 0.25) / 0.25);
+    const x = px + col * (cw + 6 * K), y = py + row * (ch + 6 * K);
+    ctx.fillStyle = lit > 0 ? "rgba(240,136,62," + 0.15 + 0.2 * lit + ")" : "#161b22";
+    ctx.strokeStyle = lit > 0 ? "#f0883e" : "#30363d"; ctx.lineWidth = 1.2 * K;
+    ctx.beginPath(); ctx.roundRect(x, y, cw, ch, 6 * K); ctx.fill(); ctx.stroke();
+    if (lit > 0) {
+      txt(LEDGER[i][0], x + cw / 2, y + ch * 0.32, 10.5, "#e6edf3");
+      txt(LEDGER[i][1], x + cw / 2, y + ch * 0.72, 11, "#f0883e", "center", true);
+    }
+  }
+  // ---- 右侧对比计数 ----
+  const cx = W * 0.52, cy = H * 0.62;
+  txt("笨办法：逐个拧动 → 12 次前向", cx, cy, 13, "#8b949e", "left");
+  txt("链式法则：逆流一遍 → 1 次反向", cx, cy + 24 * K, 13, "#f0883e", "left", true);
+  // ---- 拧旋钮 + 重跑前向 ----
+  if (tp > 0.55) {
+    const a = ease(clamp01((tp - 0.55) / 0.2));
+    ctx.globalAlpha = a;
+    txt("w −= 0.1 × 锅（拧旋钮）", cx, cy + 52 * K, 13, "#e6edf3", "left", true);
+    ctx.globalAlpha = 1;
+  }
+  if (newW) {
+    forwardFlow((tp - 0.62) / 0.38 * 1.4 % 1, true);
+    if (tp > 0.8) {
+      txt("重跑前向：P(类别1) 0.74 → 0.82 ↑", cx, cy + 78 * K, 13, "#3fb950", "left", true);
+      txt("loss 0.30 → 0.20 ✓ 该升的升了", cx, cy + 102 * K, 14, "#3fb950", "left", true);
+    }
+  }
+}
+
+const DRAW = [scene0, scene1, scene2, scene3, scene4, scene5];
+
+// ============ 主循环 ============
+const narr = document.getElementById("narr"), dotsEl = document.getElementById("dots"), stEl = document.getElementById("scene-title");
+SCENES.forEach((s, i) => {
+  const d = document.createElement("div");
+  d.className = "dot"; d.title = s.t;
+  d.onclick = () => { t = CUM[i]; };
+  dotsEl.appendChild(d);
+});
+let curScene = -1;
+function render() {
+  const tt = t % TOTAL;
+  let s = 0; while (s < SCENES.length - 1 && tt >= CUM[s + 1]) s++;
+  const tp = (tt - CUM[s]) / SCENES[s].dur;
+  if (s !== curScene) {
+    curScene = s;
+    narr.innerHTML = `<div>${SCENES[s].t}</div><div class="f">${SCENES[s].f}</div>`;
+    stEl.textContent = `第 ${s + 1}/6 幕`;
+    [...dotsEl.children].forEach((d, i) => {
+      d.className = "dot" + (i === s ? " cur" : i < s ? " done" : "");
+    });
+  }
+  ctx.clearRect(0, 0, W, H);
+  DRAW[s](clamp01(tp));
+}
+function frame(ts) {
+  const dt = Math.min(0.05, (ts - last) / 1000 || 0);
+  last = ts;
+  if (playing) t += dt * speed;
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ============ 控制 ============
+const playBtn = document.getElementById("play");
+playBtn.onclick = () => { playing = !playing; playBtn.textContent = playing ? "⏸ 暂停" : "▶ 播放"; };
+if (!playing) playBtn.textContent = "▶ 播放";
+document.getElementById("prev").onclick = () => { t = CUM[Math.max(0, curScene - 1)]; };
+document.getElementById("next").onclick = () => { t = CUM[Math.min(SCENES.length - 1, curScene + 1)]; };
+document.getElementById("speed").oninput = e => { speed = +e.target.value; };
+</script>
+</body>
+</html>
